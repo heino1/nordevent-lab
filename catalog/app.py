@@ -18,7 +18,7 @@ from nelib import (App, HttpError, INSTANCE, Latency, UpstreamTimeout, env_int, 
                    http_json, log)
 
 DATA_VERSION = env_str("CATALOG_DATA_VERSION", required=True)
-WORK_MS = env_int("CATALOG_WORK_MS", 15)        # protsessoriaeg ühe päringu kohta (ms)
+WORK_MS = env_int("CATALOG_WORK_MS", 10)        # protsessoriaeg ühe päringu kohta (ms)
 SOURCE = env_str("CATALOG_AVAILABILITY_SOURCE", "api")
 BOOKING_URL = env_str("BOOKING_URL", "http://booking:8000")
 AVAIL_TIMEOUT = env_int("CATALOG_AVAILABILITY_TIMEOUT_MS", 800) / 1000.0

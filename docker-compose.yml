@@ -34,7 +34,7 @@ services:
     restart: unless-stopped
     environment:
       CATALOG_DATA_VERSION: ${CATALOG_DATA_VERSION-}
-      CATALOG_WORK_MS: ${CATALOG_WORK_MS:-15}
+      CATALOG_WORK_MS: ${CATALOG_WORK_MS:-10}
       CATALOG_AVAILABILITY_SOURCE: ${CATALOG_AVAILABILITY_SOURCE:-api}
       CATALOG_AVAILABILITY_TIMEOUT_MS: ${CATALOG_AVAILABILITY_TIMEOUT_MS:-800}
       BOOKING_URL: http://booking:8000
@@ -131,7 +131,7 @@ services:
     restart: unless-stopped
     environment:
       CATALOG_DATA_VERSION: ${CATALOG_DATA_VERSION-}
-      CATALOG_WORK_MS: ${CATALOG_WORK_MS:-15}
+      CATALOG_WORK_MS: ${CATALOG_WORK_MS:-10}
       CATALOG_AVAILABILITY_SOURCE: ${CATALOG_AVAILABILITY_SOURCE:-api}
       BOOKING_URL: http://localhost:8002
       BOOKING_DB_PATH: /data/booking.db
@@ -154,7 +154,7 @@ services:
       <<: *health
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2); u.urlopen('http://localhost:8002/health', timeout=2)"]
     deploy:
-      resources: {limits: {cpus: "${CLASSIC_CPUS:-0.75}", memory: 256M}}
+      resources: {limits: {cpus: "${CLASSIC_CPUS:-0.5}", memory: 256M}}
 
   loadgen:                       # käivitatakse: ./lab.sh load
     profiles: ["tools"]

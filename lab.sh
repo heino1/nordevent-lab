@@ -23,7 +23,9 @@ classic_off_if_unused() {
 
 up() {
   need_env
-  "${DC[@]}" up -d --build --remove-orphans || return 1
+  echo "Ehitan konteinerkujundid (esimesel korral ~1 min)..."
+  "${DC[@]}" build -q || return 1
+  "${DC[@]}" up -d --remove-orphans --quiet-pull 2>&1 | grep -vE "^\s*(✔|\[\+\])" || true
   classic_off_if_unused
   echo "Ootan, kuni teenused käivituvad..."; sleep 6
   "${DC[@]}" ps --format 'table {{.Service}}\t{{.Name}}\t{{.Status}}'
@@ -57,7 +59,8 @@ case "${1:-help}" in
   load)
     need_env
     echo "Koormusprofiil: ${2:-opening}  (opening ~100 s | short 30 s | calm 60 s)"
-    "${DC[@]}" --profile tools run --rm --build -e LOAD_PROFILE="${2:-opening}" loadgen ;;
+    "${DC[@]}" --profile tools build -q loadgen || exit 1
+    "${DC[@]}" --profile tools run --rm -e LOAD_PROFILE="${2:-opening}" loadgen ;;
 
   buy)
     key="kasutaja-$(date +%s%N | tail -c 7)"
@@ -96,12 +99,18 @@ for line in sys.stdin:
     try: rows.append(json.loads(line))
     except ValueError: pass
 rids = {r.get("request_id") for r in rows if needle in json.dumps(r, ensure_ascii=False)} - {None}
+import time as _t
+def tkey(r):
+    if "epoch" in r:  # gateway (nginx): täpne aeg väljal epoch
+        e = float(r["epoch"])
+        r["ts"] = _t.strftime("%Y-%m-%dT%H:%M:%S", _t.gmtime(e)) + ".%03dZ" % int((e % 1) * 1000)
+    return r.get("ts", "")
 sel = sorted([r for r in rows if r.get("request_id") in rids or needle in json.dumps(r, ensure_ascii=False)],
-             key=lambda r: r.get("ts", ""))
+             key=tkey)
 if not sel: print("Ei leidnud logidest:", needle); sys.exit()
 print("korrelatsioonitunnused:", ", ".join(sorted(rids)))
 for r in sel:
-    extra = {k: v for k, v in r.items() if k not in ("ts","level","service","instance","event","request_id")}
+    extra = {k: v for k, v in r.items() if k not in ("ts","epoch","level","service","instance","event","request_id")}
     print(r.get("ts","")[11:23], r.get("level","").ljust(5), r.get("service","").ljust(20), r.get("event","").ljust(28),
           " ".join(f"{k}={v}" for k, v in extra.items())[:110])
 ' "$2" ;;

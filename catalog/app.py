@@ -5,7 +5,7 @@ Andmeomand: ürituste info. Saadavust (vabu kohti) EI oma - selle omanik on bron
 
 Olulised seaded (vt .env):
   CATALOG_DATA_VERSION          kohustuslik; puudumisel teenus ei käivitu
-  CATALOG_WORK_UNITS            protsessoritöö hulk ühe päringu kohta (koormuse simulatsioon)
+  CATALOG_WORK_MS               protsessoriaeg (ms) ühe päringu kohta; kalibreeritakse käivitusel
   CATALOG_AVAILABILITY_SOURCE   api | shared_db | none  - kust detailvaade saadavuse võtab
   CATALOG_AVAILABILITY_TIMEOUT_MS  kui kaua oodatakse broneerimisteenuse vastust
 """
@@ -18,7 +18,7 @@ from nelib import (App, HttpError, INSTANCE, Latency, UpstreamTimeout, env_int, 
                    http_json, log)
 
 DATA_VERSION = env_str("CATALOG_DATA_VERSION", required=True)
-WORK_UNITS = env_int("CATALOG_WORK_UNITS", 20000)
+WORK_MS = env_int("CATALOG_WORK_MS", 15)        # protsessoriaeg ühe päringu kohta (ms)
 SOURCE = env_str("CATALOG_AVAILABILITY_SOURCE", "api")
 BOOKING_URL = env_str("BOOKING_URL", "http://booking:8000")
 AVAIL_TIMEOUT = env_int("CATALOG_AVAILABILITY_TIMEOUT_MS", 800) / 1000.0
@@ -37,6 +37,18 @@ EVENTS = [
      "venue": "Vallikäär", "ticket_types": ["GA", "VIP"]},
 ]
 BY_ID = {e["id"]: e for e in EVENTS}
+
+def calibrate():
+    """Mõõdab masina kiiruse, et üks päring maksaks igal masinal ~WORK_MS ms protsessoriaega.
+    Väikesed mõõtetükid (~1 ms) ei jää konteineri CPU-piiri (cgroup quota) taha."""
+    best = float("inf")
+    for _ in range(30):
+        t = time.perf_counter()
+        burn(1000)
+        best = min(best, time.perf_counter() - t)
+    per_unit_ms = best * 1000 / 1000
+    return max(100, int(WORK_MS / per_unit_ms)), per_unit_ms
+
 
 lat = Latency()
 counters = {"requests": 0, "availability_degraded": 0, "shared_db_errors": 0}
@@ -86,6 +98,12 @@ def availability(event_id, rid):
         raise HttpError(500, "availability_source_failed", detail=str(e))
 
 
+_override = env_int("CATALOG_WORK_UNITS", 0)
+if _override > 0:
+    WORK_UNITS, PER_UNIT_MS = _override, None
+else:
+    WORK_UNITS, PER_UNIT_MS = calibrate()
+
 app = App()
 
 
@@ -129,13 +147,14 @@ def stats(req):
     with c_lock:
         c = dict(counters)
     return 200, {"service": "catalog", "instance": INSTANCE, "data_version": DATA_VERSION,
-                 "availability_source": SOURCE, "work_units": WORK_UNITS,
+                 "availability_source": SOURCE, "work_ms_target": WORK_MS, "work_units": WORK_UNITS,
                  "latency_ms": lat.summary(), "counters": c,
                  "note": "Iga koopia (instance) loeb ainult enda päringuid"}
 
 
 if __name__ == "__main__":
-    log("INFO", "config_loaded", data_version=DATA_VERSION, work_units=WORK_UNITS,
+    log("INFO", "config_loaded", data_version=DATA_VERSION, work_ms=WORK_MS, work_units=WORK_UNITS,
+        calibrated_unit_us=round(PER_UNIT_MS * 1000, 2) if PER_UNIT_MS else None,
         availability_source=SOURCE, availability_timeout_ms=int(AVAIL_TIMEOUT * 1000))
     if SOURCE == "shared_db":
         log("WARN", "shared_database_coupling",

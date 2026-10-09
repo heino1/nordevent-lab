@@ -2,9 +2,9 @@
 # Muutujad ${CATALOG_UPSTREAM} ja ${BOOKING_UPSTREAM} tulevad .env failist.
 # Nende muutmine = liikluse suunamine (strangler fig: vana -> uus teenus).
 
-log_format nejson escape=json '{"ts":"$time_iso8601","level":"INFO","service":"gateway",'
+log_format nejson escape=json '{"ts":"$time_iso8601","epoch":$msec,"level":"INFO","service":"gateway",'
   '"event":"request_end","request_id":"$request_id","method":"$request_method",'
-  '"route":"$uri","http_status":$status,"duration_s":$request_time,'
+  '"route":"$request_uri","http_status":$status,"duration_s":$request_time,'
   '"upstream":"$upstream_addr","upstream_s":"$upstream_response_time"}';
 
 # Dockeri sisemine DNS: skaleeritud teenuse kõik koopiad, uuendus iga 5 s

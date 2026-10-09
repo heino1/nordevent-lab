@@ -1,0 +1,39 @@
+# NordEvent Lab - GATEWAY (koormusjaotur / API-värav, AWS ALB analoog)
+# Muutujad ${CATALOG_UPSTREAM} ja ${BOOKING_UPSTREAM} tulevad .env failist.
+# Nende muutmine = liikluse suunamine (strangler fig: vana -> uus teenus).
+
+log_format nejson escape=json '{"ts":"$time_iso8601","level":"INFO","service":"gateway",'
+  '"event":"request_end","request_id":"$request_id","method":"$request_method",'
+  '"route":"$uri","http_status":$status,"duration_s":$request_time,'
+  '"upstream":"$upstream_addr","upstream_s":"$upstream_response_time"}';
+
+# Dockeri sisemine DNS: skaleeritud teenuse kõik koopiad, uuendus iga 5 s
+resolver 127.0.0.11 valid=5s ipv6=off;
+
+server {
+    listen 80;
+    access_log /dev/stdout nejson;
+    proxy_connect_timeout 2s;
+    proxy_read_timeout ${GATEWAY_TIMEOUT_S}s;
+    proxy_set_header X-Request-ID $request_id;
+    add_header X-Request-ID $request_id always;
+
+    location = / {
+        default_type text/plain;
+        return 200 "NordEvent Lab gateway\nkataloog  -> ${CATALOG_UPSTREAM}\nbroneerimine -> ${BOOKING_UPSTREAM}\n";
+    }
+    location /api/catalog/ {
+        set $up ${CATALOG_UPSTREAM};
+        rewrite ^/api/catalog/(.*)$ /$1 break;
+        proxy_pass http://$up;
+    }
+    location /api/booking/ {
+        set $up ${BOOKING_UPSTREAM};
+        rewrite ^/api/booking/(.*)$ /$1 break;
+        proxy_pass http://$up;
+    }
+    # Ainult /stats on väljast nähtav; sisemised teenused ei ole internetti avatud
+    location = /api/paybaltic/stats    { set $up paybaltic:8000;    rewrite ^ /stats break; proxy_pass http://$up; }
+    location = /api/notification/stats { set $up notification:8000; rewrite ^ /stats break; proxy_pass http://$up; }
+    location = /api/queue/stats        { set $up queue:8000;        rewrite ^ /stats break; proxy_pass http://$up; }
+}

@@ -1,0 +1,18 @@
+# Lisafail: saadab kõigi konteinerite logid Amazon CloudWatch Logsi.
+# Eeldus: EC2-l on IAM instance profile "LabInstanceProfile".
+# Sisselülitamine: ./lab.sh cloudwatch on
+x-cw: &cw
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION:-us-east-1}
+    awslogs-group: ${CW_LOG_GROUP:-/nordevent-lab}
+    awslogs-create-group: "true"
+    tag: "{{.Name}}"
+services:
+  gateway: {logging: *cw}
+  catalog: {logging: *cw}
+  booking: {logging: *cw}
+  notification: {logging: *cw}
+  queue: {logging: *cw}
+  paybaltic: {logging: *cw}
+  classic: {logging: *cw}

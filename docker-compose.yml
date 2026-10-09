@@ -1,0 +1,181 @@
+# =====================================================================
+# NordEvent Lab - käitusmudel
+# Iga teenuse plokk siin vastab AWS ECS-is ühele "task definition'ile"
+# (kujund, CPU/mälu, keskkonnamuutujad, tervisekontroll, logimine) ja
+# "service'ile" (soovitud koopiate arv = deploy.replicas).
+# Väärtused tulevad failist .env  ->  ./lab.sh scenario <nimi>
+# =====================================================================
+name: nordevent
+
+x-health: &health
+  interval: 10s
+  timeout: 3s
+  retries: 3
+  start_period: 5s
+
+services:
+
+  gateway:                       # ALB analoog: ainus internetti avatud komponent
+    image: public.ecr.aws/docker/library/nginx:1.27-alpine
+    restart: unless-stopped
+    ports: ["80:80"]
+    environment:
+      CATALOG_UPSTREAM: ${CATALOG_UPSTREAM:-catalog:8000}
+      BOOKING_UPSTREAM: ${BOOKING_UPSTREAM:-booking:8000}
+      GATEWAY_TIMEOUT_S: ${GATEWAY_TIMEOUT_S:-10}
+    volumes:
+      - ./gateway/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    deploy:
+      resources: {limits: {cpus: "0.5", memory: 128M}}
+
+  catalog:                       # skaleeritav: CATALOG_REPLICAS
+    build: {context: ., dockerfile: catalog/Dockerfile}
+    image: nordevent/catalog:${CATALOG_VERSION:-1.0}
+    restart: unless-stopped
+    environment:
+      CATALOG_DATA_VERSION: ${CATALOG_DATA_VERSION-}
+      CATALOG_WORK_UNITS: ${CATALOG_WORK_UNITS:-40000}
+      CATALOG_AVAILABILITY_SOURCE: ${CATALOG_AVAILABILITY_SOURCE:-api}
+      CATALOG_AVAILABILITY_TIMEOUT_MS: ${CATALOG_AVAILABILITY_TIMEOUT_MS:-800}
+      BOOKING_URL: http://booking:8000
+      BOOKING_DB_PATH: /shared/booking.db
+    volumes:
+      - booking-data:/shared:ro    # vajalik ainult jagatud andmebaasi stsenaariumis
+    depends_on: [booking]
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+    deploy:
+      replicas: ${CATALOG_REPLICAS:-1}
+      resources: {limits: {cpus: "${CATALOG_CPUS:-0.5}", memory: "${CATALOG_MEMORY:-128M}"}}
+
+  booking:                       # olekuga teenus: üks koopia, oma andmeköide
+    build: {context: ., dockerfile: booking/Dockerfile}
+    image: nordevent/booking:${BOOKING_VERSION:-1.0}
+    restart: unless-stopped
+    environment:
+      BOOKING_SCHEMA: ${BOOKING_SCHEMA:-v1}
+      IDEMPOTENCY: ${IDEMPOTENCY:-on}
+      PAY_TIMEOUT_MS: ${PAY_TIMEOUT_MS:-2000}
+      PAY_RETRIES: ${PAY_RETRIES:-1}
+      PAY_BACKOFF: ${PAY_BACKOFF:-exponential}
+      RESERVATION_TTL_S: ${RESERVATION_TTL_S:-120}
+      NOTIFY_MODE: ${NOTIFY_MODE:-async}
+      NOTIFY_TIMEOUT_MS: ${NOTIFY_TIMEOUT_MS:-2000}
+      OUTBOX: ${OUTBOX:-off}
+      PAY_URL: http://paybaltic:8000
+      NOTIFY_URL: http://notification:8000
+      QUEUE_URL: http://queue:8000
+      CALLBACK_URL: http://booking:8000/payments/callback
+      BOOKING_DB_PATH: /data/booking.db
+      PAYBALTIC_API_KEY_FILE: /run/secrets/paybaltic_api_key
+      PAYBALTIC_API_KEY: ${BOOKING_PAYBALTIC_API_KEY-}   # halb tava: saladus keskkonnamuutujas
+    secrets: [paybaltic_api_key]
+    volumes: ["booking-data:/data"]
+    depends_on: [paybaltic, queue]
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+    deploy:
+      resources: {limits: {cpus: "0.5", memory: 128M}}
+
+  notification:
+    build: {context: ., dockerfile: notification/Dockerfile}
+    image: nordevent/notification:${NOTIFICATION_VERSION:-1.0}
+    restart: unless-stopped
+    environment:
+      NOTIFY_LATENCY_MS: ${NOTIFY_LATENCY_MS:-200}
+      NOTIFY_FAIL_PCT: ${NOTIFY_FAIL_PCT:-0}
+      NOTIFY_WORKERS: ${NOTIFY_WORKERS:-2}
+      NOTIFY_DEDUP: ${NOTIFY_DEDUP:-on}
+      QUEUE_URL: http://queue:8000
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=2)"]
+    deploy:
+      resources: {limits: {cpus: "0.25", memory: 96M}}
+
+  queue:                         # Amazon SQS analoog
+    build: {context: ., dockerfile: queue/Dockerfile}
+    image: nordevent/queue:1.0
+    restart: unless-stopped
+    environment:
+      QUEUE_MAX_RECEIVES: ${QUEUE_MAX_RECEIVES:-5}
+      QUEUE_VISIBILITY_S: ${QUEUE_VISIBILITY_S:-20}
+      QUEUE_DB_PATH: /data/queue.db
+    volumes: ["queue-data:/data"]
+    deploy:
+      resources: {limits: {cpus: "0.25", memory: 96M}}
+
+  paybaltic:                     # VÄLINE maksepartner (simulaator) - ei kuulu NordEventile
+    build: {context: ., dockerfile: paybaltic/Dockerfile}
+    image: nordevent/paybaltic-simulator:1.0
+    restart: unless-stopped
+    environment:
+      PAYBALTIC_LATENCY_MS: ${PAYBALTIC_LATENCY_MS:-400}
+      PAYBALTIC_LATENCY_JITTER_MS: ${PAYBALTIC_LATENCY_JITTER_MS:-150}
+      PAYBALTIC_FAIL_PCT: ${PAYBALTIC_FAIL_PCT:-0}
+      PAYBALTIC_OUTAGE: ${PAYBALTIC_OUTAGE:-off}
+      PAYBALTIC_SUCCESS_PCT: ${PAYBALTIC_SUCCESS_PCT:-97}
+      PAYBALTIC_CALLBACK_DELAY_MS: ${PAYBALTIC_CALLBACK_DELAY_MS:-1500}
+      PAYBALTIC_DUPLICATE_CALLBACK_PCT: ${PAYBALTIC_DUPLICATE_CALLBACK_PCT:-0}
+      PAYBALTIC_API_KEY_FILE: /run/secrets/paybaltic_api_key
+    secrets: [paybaltic_api_key]
+    deploy:
+      resources: {limits: {cpus: "0.25", memory: 96M}}
+
+  classic:                       # NE-Classic: kataloog + broneerimine ÜHES konteineris
+    profiles: ["classic"]
+    build: {context: ., dockerfile: classic/Dockerfile}
+    image: nordevent/ne-classic:2026.08
+    restart: unless-stopped
+    environment:
+      CATALOG_DATA_VERSION: ${CATALOG_DATA_VERSION-}
+      CATALOG_WORK_UNITS: ${CATALOG_WORK_UNITS:-40000}
+      CATALOG_AVAILABILITY_SOURCE: ${CATALOG_AVAILABILITY_SOURCE:-api}
+      BOOKING_URL: http://localhost:8002
+      BOOKING_DB_PATH: /data/booking.db
+      IDEMPOTENCY: ${IDEMPOTENCY:-on}
+      PAY_TIMEOUT_MS: ${PAY_TIMEOUT_MS:-2000}
+      PAY_RETRIES: ${PAY_RETRIES:-1}
+      PAY_BACKOFF: ${PAY_BACKOFF:-exponential}
+      RESERVATION_TTL_S: ${RESERVATION_TTL_S:-120}
+      NOTIFY_MODE: ${NOTIFY_MODE:-async}
+      OUTBOX: ${OUTBOX:-off}
+      PAY_URL: http://paybaltic:8000
+      NOTIFY_URL: http://notification:8000
+      QUEUE_URL: http://queue:8000
+      CALLBACK_URL: http://classic:8002/payments/callback
+      SERVER_WORKERS: ${CLASSIC_WORKERS:-16}
+      PAYBALTIC_API_KEY_FILE: /run/secrets/paybaltic_api_key
+    secrets: [paybaltic_api_key]
+    volumes: ["classic-data:/data"]
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8000/health', timeout=2); u.urlopen('http://localhost:8002/health', timeout=2)"]
+    deploy:
+      resources: {limits: {cpus: "${CLASSIC_CPUS:-1.0}", memory: 256M}}
+
+  loadgen:                       # käivitatakse: ./lab.sh load
+    profiles: ["tools"]
+    build: {context: ., dockerfile: loadgen/Dockerfile}
+    image: nordevent/loadgen:1.0
+    environment:
+      TARGET: http://gateway
+      LOAD_PROFILE: ${LOAD_PROFILE:-opening}
+      CATALOG_RPS_BASE: ${CATALOG_RPS_BASE:-5}
+      CATALOG_RPS_PEAK: ${CATALOG_RPS_PEAK:-60}
+      BOOKING_RPS_BASE: ${BOOKING_RPS_BASE:-0.5}
+      BOOKING_RPS_PEAK: ${BOOKING_RPS_PEAK:-5}
+      CLIENT_TIMEOUT_S: ${CLIENT_TIMEOUT_S:-4}
+      PANIC_RETRY: ${PANIC_RETRY:-on}
+      CLIENT_SENDS_KEY: ${CLIENT_SENDS_KEY:-on}
+
+secrets:
+  paybaltic_api_key:
+    file: ./secrets/paybaltic_api_key.txt
+
+volumes:
+  booking-data:
+  queue-data:
+  classic-data:

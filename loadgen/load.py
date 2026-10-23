@@ -87,7 +87,7 @@ def catalog_visit():
 
 
 def booking_attempt():
-    cust = "c-%05d" % random.randint(1, 20000)
+    cust = "c-" + uuid.uuid4().hex[:8]  # iga külastaja on erinev
     body = {"event_id": "soor-2027", "ticket_type": "VIP" if random.random() < 0.1 else "GA",
             "qty": random.choice([1, 1, 2]), "customer": cust}
     key = uuid.uuid4().hex

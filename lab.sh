@@ -6,6 +6,21 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
+# Dockeri õigus: kui terminal avati enne, kui kasutaja lisati gruppi "docker",
+# ei ole grupp selles sessioonis veel aktiivne. Käivitame end siis grupi alt uuesti.
+case "${1:-help}" in help|buy) ;; *)
+  if ! docker info >/dev/null 2>&1; then
+    if [ -z "${NE_SG:-}" ] && getent group docker | grep -qw "$(id -un)"; then
+      export NE_SG=1
+      exec sg docker -c "$(printf '%q ' "$0" "$@")"
+    fi
+    echo "Docker ei ole kättesaadav (permission denied või Docker ei tööta)."
+    echo "Lahendus: sulge terminal ja ava EC2 Instance Connect uuesti, või käivita: newgrp docker"
+    echo "Kui paigaldus alles käib, vaata: tail -5 /var/log/nordevent-install.log"
+    exit 1
+  fi ;;
+esac
+
 DC=(docker compose -f docker-compose.yml)
 [ -f .cloudwatch ] && DC+=(-f docker-compose.cloudwatch.yml)
 G="http://localhost"
@@ -89,7 +104,7 @@ case "${1:-help}" in
 
   trace)
     [ -n "${2:-}" ] || { echo "Kasutus: ./lab.sh trace <tellimuse-id või request_id>"; exit 1; }
-    "${DC[@]}" logs --no-color --no-log-prefix 2>/dev/null | python3 -c '
+    "${DC[@]}" logs --no-color --no-log-prefix | python3 -c '
 import json, sys
 needle = sys.argv[1]
 rows = []
